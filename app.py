@@ -3,7 +3,7 @@ from pdf_utils import extract_pdf_pages
 from inference_pipeline import run_extraction, run_inference
 from PIL import Image
 
-st.set_page_config(page_title="📘 PDF Model Comparator", layout="wide")
+st.set_page_config(page_title="📘 PDF Models + Prompts Evaluator", layout="wide")
 
 # ——— Session State Init ———
 for key, default in {
@@ -80,17 +80,21 @@ st.subheader("📄 Extracted Content")
 page_tabs = st.tabs([f"📄 Page {i+1}" for i in range(len(pages))])
 for i, tab in enumerate(page_tabs):
     with tab:
-        st.image(pages[i], caption=f"Page {i+1}", use_container_width=True)
-        model_tabs = st.tabs(models)
-        for model_tab, model in zip(model_tabs, models):
-            with model_tab:
-                text = st.session_state.extraction_results[model][i]
-                st.text_area(
-                    label=f"{model} — Page {i+1}",
-                    value=text,
-                    height=300,
-                    key=f"display_{model}_page_{i}"
-                )
+        col_img, col_text = st.columns([1.5, 2])
+        with col_img:
+            #with st.expander("🖼️ View Page Image"): :show image
+            st.image(pages[i], caption=f"Page {i+1}", width=300)
+        with col_text:
+            model_tabs = st.tabs(models)
+            for model_tab, model in zip(model_tabs, models):
+                with model_tab:
+                    text = st.session_state.extraction_results[model][i]
+                    st.text_area(
+                        label=f"{model} — Page {i+1}",
+                        value=text,
+                        height=300,
+                        key=f"display_{model}_page_{i}"
+                    )
 
 # ——— Q&A Interface ———
 st.markdown("---")
