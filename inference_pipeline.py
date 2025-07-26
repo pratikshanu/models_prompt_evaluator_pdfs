@@ -1,18 +1,84 @@
-from model_api import query_model_with_image, query_model_with_text
+import requests
+import json
+import time
+import base64
+import io
+from PIL import Image
 
-def run_extraction(models, pages, extraction_prompt, max_tokens, temperature):
-    results = {}
-    for model in models:
-        results[model] = []
-        for page in pages:
-            response = query_model_with_image(model, page, extraction_prompt, max_tokens, temperature)
-            results[model].append(response["content"])
-    return results
+# This module now handles two types of inference calls.
+OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
 
-def run_inference(models, extracted_data, user_prompt, max_tokens, temperature):
-    inference_results = {}
-    for model in models:
-        full_context = "\n\n".join(extracted_data[model])
-        response = query_model_with_text(model, full_context, user_prompt, max_tokens, temperature)
-        inference_results[model] = response
-    return inference_results
+def _image_to_base64(image_bytes: bytes) -> str:
+    """Helper function to convert image bytes to a base64 string."""
+    buffered = io.BytesIO(image_bytes)
+    img = Image.open(buffered)
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+def _call_ollama_api(model: str, messages: list, max_tokens: int, temperature: float, top_k: int, top_p: float) -> dict:
+    """
+    Generic internal function to call the local Ollama API, now with advanced parameters.
+    """
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "num_predict": max_tokens,
+            "temperature": temperature,
+            "top_k": top_k,
+            "top_p": top_p
+        }
+    }
+    
+    start_time = time.time()
+    try:
+        response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()
+        result = response.json()
+        end_time = time.time()
+
+        if 'message' in result and 'content' in result['message']:
+            return {
+                "content": result['message']['content'].strip(),
+                "elapsed": end_time - start_time,
+                "tokens": result.get("eval_count", 0) 
+            }
+        else:
+            error_info = result.get('error', 'Unknown error format.')
+            return {"error": error_info}
+            
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)}
+
+def run_inference_on_text(model: str, final_context: str, user_prompt: str, max_tokens: int, temperature: float, top_k: int, top_p: float) -> dict:
+    """
+    Runs inference for a single model using text context.
+    """
+    prompt_with_context = f"""
+    Using the context below, answer the user's question.
+
+    - context:
+    ---
+    {final_context}
+    ---
+
+    - question:
+    {user_prompt}
+    """
+    messages = [{"role": "user", "content": prompt_with_context}]
+    return _call_ollama_api(model, messages, max_tokens, temperature, top_k, top_p)
+
+def run_inference_on_image(model: str, image_bytes: bytes, user_prompt: str, max_tokens: int, temperature: float, top_k: int, top_p: float) -> dict:
+    """
+    Runs inference for a single model using an image and a prompt, skipping extraction.
+    """
+    base64_image = _image_to_base64(image_bytes)
+    messages = [{
+        "role": "user",
+        "content": user_prompt,
+        "images": [base64_image]
+    }]
+    return _call_ollama_api(model, messages, max_tokens, temperature, top_k, top_p)
