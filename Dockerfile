@@ -92,7 +92,7 @@ RUN pip3 install --no-cache-dir \
     PyMuPDF \
     pytesseract \
     requests \
-    pdf2image --break-system-packages
+    pdf2image
 
 # Expose the ports that will be used by Streamlit and Ollama (if external access is desired).
 EXPOSE 8501

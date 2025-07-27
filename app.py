@@ -1,11 +1,12 @@
 import streamlit as st
 from pdf_utils import extract_pdf_pages
-from extraction_pipeline import extract_and_correct_document # Main extraction logic
-from inference_pipeline import run_inference_on_text, run_inference_on_image # Import both inference types
+from extraction_pipeline import extract_and_correct_document
+from inference_pipeline import run_inference_on_text, run_inference_on_image
+from prompts import EXTRACTION_PROMPT, INFERENCE_PROMPT
 from PIL import Image
 import io
 
-st.set_page_config(page_title="PDF & Image Extractor & LLM Evaluator", layout="wide")
+st.set_page_config(page_title="LLM + Prompts Evaluator", layout="wide")
 
 # ——— Session State Init ———
 if 'session_started' not in st.session_state:
@@ -21,18 +22,13 @@ if 'inference_results' not in st.session_state:
 def generate_report_markdown(final_context, prompt, inference_results, extraction_model, file_type):
     """Generates a comprehensive Markdown report of the entire analysis session."""
     report = f"# Analysis Report\n\n"
-
     if final_context:
         report += f"## Extracted Content (using `{extraction_model}`)\n\n"
         report += f"```markdown\n{final_context}\n```\n\n"
     else:
         report += f"## Direct Q&A on Image\n\n"
         report += f"An analysis was run directly on the uploaded {file_type}.\n\n"
-
-    report += f"---\n\n"
-    report += f"## Inference Results\n\n"
-    report += f"**Question Asked:**\n> {prompt}\n\n"
-
+    report += f"---\n\n## Inference Results\n\n**Question Asked:**\n> {prompt}\n\n"
     for model, result in inference_results.items():
         report += f"### Model: `{model}`\n\n"
         if "error" in result:
@@ -52,57 +48,30 @@ with st.sidebar:
     st.title("⚙️ Configuration")
     st.markdown("#### 1. Upload Document")
     uploaded_file = st.file_uploader("Upload a PDF or Image file", type=["pdf", "png", "jpg", "jpeg"], label_visibility="collapsed")
-
+    
     if uploaded_file:
         if "image" in uploaded_file.type:
-            # This info box makes the choice much more prominent
             st.info("🖼️ **Image Detected!** Please choose a processing mode below.")
-            st.session_state.qa_mode = st.radio(
-                "Select Mode for Image",
-                ("Run Extraction Pipeline", "Ask Question Directly"),
-                index=1,
-                key="qa_mode_radio",
-                horizontal=True,
-                label_visibility="collapsed" # The info box acts as the label
-            )
+            st.session_state.qa_mode = st.radio("Select Mode for Image",("Run Extraction Pipeline", "Ask Question Directly"), index=1, key="qa_mode_radio", horizontal=True, label_visibility="collapsed")
         else:
             st.session_state.qa_mode = "Run Extraction Pipeline"
-
+    
     st.markdown("---")
     st.markdown("#### 2. Select Models")
-
-    is_direct_qa_mode = (
-        uploaded_file is not None
-        and "image" in uploaded_file.type
-        and st.session_state.qa_mode == "Ask Question Directly"
-    )
-
-    extraction_model = st.selectbox(
-        "Model for Extraction",
-        ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:latest", "qwen2.5vl:7b"],
-        index=2, # Default to llama3.2-vision:11b
-        help="Choose your best vision model to create the high-quality context. (Disabled in 'Ask Question Directly' mode)",
-        disabled=is_direct_qa_mode
-    )
-
-    models_for_inference = st.multiselect(
-        "Models for Inference",
-        ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:latest", "qwen2.5vl:7b"],
-        default=["llama3.2-vision:11b", "gemma3:12b", "mistral-small3.2:latest"],
-        help="Choose which models to ask questions of."
-    )
-
+    is_direct_qa_mode = (uploaded_file is not None and "image" in uploaded_file.type and st.session_state.qa_mode == "Ask Question Directly")
+    extraction_model = st.selectbox("Model for Extraction", ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:latest", "qwen2.5vl:7b"], index=2, help="Choose your best vision model to create the high-quality context. (Disabled in 'Ask Question Directly' mode)", disabled=is_direct_qa_mode)
+    models_for_inference = st.multiselect("Models for Inference", ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:latest", "qwen2.5vl:7b"], default=["llama3.2-vision:11b", "gemma3:12b", "mistral-small3.2:latest"], help="Choose which models to ask questions of.")
+    
     st.markdown("---")
     st.markdown("#### 3. Set Parameters")
     max_tokens = st.slider("Max Tokens", 100, 4000, 1000, help="Sets the maximum number of tokens to generate in the response.")
     temperature = st.slider("Temperature", 0.0, 1.0, 0.1, help="Controls randomness. Lower is more deterministic, higher is more creative.")
-
     st.markdown("##### Advanced Parameters")
     top_k = st.slider("Top K", 0, 100, 40, help="Reduces the probability of generating nonsense. A higher value (e.g., 100) gives more varied answers.")
     top_p = st.slider("Top P", 0.0, 1.0, 0.9, help="Works with Top K to improve realism. A higher value (e.g., 0.9) gives more varied answers.")
 
     st.markdown("---")
-    if st.button("🚀 Start Session", use_container_width=True):
+    if st.button("🚀 Start Session", use_container_width=True, type="primary"):
         if uploaded_file and models_for_inference:
             st.session_state.file_bytes = uploaded_file.read()
             st.session_state.file_type = uploaded_file.type
@@ -119,41 +88,42 @@ with st.sidebar:
             del st.session_state[k]
         st.rerun()
 
-# ——— Main Page ———
-st.title("📄 PDF & Image Extractor & LLM Evaluator")
+# ——— Main Page Content ———
+st.title("LLM + Prompts Evaluator")
 
 if st.session_state.get('run_extraction'):
     is_direct_mode = st.session_state.get('qa_mode') == "Ask Question Directly"
-
     if "image" in st.session_state.file_type and is_direct_mode:
         st.session_state.pages_for_display = [Image.open(io.BytesIO(st.session_state.file_bytes))]
         st.session_state.final_context = None
         st.session_state.extraction_done = True
         st.success("Direct Q&A mode ready. Ask a question below.")
     else:
-        with st.spinner(f"Running extraction with `{st.session_state.extraction_model}`..."):
-            if st.session_state.file_type == "application/pdf":
-                st.session_state.pages_for_display = extract_pdf_pages(st.session_state.file_bytes)
-            else:
-                st.session_state.pages_for_display = [Image.open(io.BytesIO(st.session_state.file_bytes))]
-
-            final_context = extract_and_correct_document(st.session_state.file_bytes, st.session_state.file_type, st.session_state.extraction_model)
-            if final_context:
-                st.session_state.final_context = final_context
-                st.session_state.extraction_done = True
-                st.success("Extraction complete!")
-            else:
-                st.error("Extraction failed. Check the console for errors.")
-                st.session_state.extraction_done = False
-
+        with st.spinner(f"Running extraction with `{st.session_state.extraction_model}`..."), st.expander("Show Extraction Log", expanded=True):
+            final_context = extract_and_correct_document(st.session_state.file_bytes, st.session_state.file_type, st.session_state.extraction_model, EXTRACTION_PROMPT)
+            
+        if st.session_state.file_type == "application/pdf":
+            st.session_state.pages_for_display = extract_pdf_pages(st.session_state.file_bytes)
+        else:
+            st.session_state.pages_for_display = [Image.open(io.BytesIO(st.session_state.file_bytes))]
+            
+        if final_context:
+            st.session_state.final_context = final_context
+            st.session_state.extraction_done = True
+            st.success("Extraction complete!")
+        else:
+            st.error("Extraction failed. Check the log above for errors.")
+            st.session_state.extraction_done = False
+            
     st.session_state.run_extraction = False
     st.rerun()
 
 if st.session_state.get('session_started') and st.session_state.get('extraction_done'):
     is_direct_mode = st.session_state.get('final_context') is None
-
+    
     if is_direct_mode:
         st.subheader("Direct Q&A on Image")
+        # FIX: Use columns to constrain the image size and center it.
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.image(st.session_state.pages_for_display[0], caption="Original Image", use_container_width=True)
@@ -170,29 +140,24 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
 
     st.markdown("---")
     st.subheader("❓ Ask a Question")
+    
     prompt = st.text_area("Your Question/Prompt", height=100, label_visibility="collapsed")
-
-    # --- Button and Inference Logic ---
-    col1, col2 = st.columns([5, 1]) # Ratio for button alignment
+    col1, col2 = st.columns([5, 1])
     run_inference_clicked = col1.button("🚀 Run Inference")
 
     if run_inference_clicked and prompt:
         st.session_state.last_prompt = prompt
-        st.session_state.inference_results = {} # Clear previous results
-
+        st.session_state.inference_results = {}
         st.subheader("🧠 Inference Results")
-        cols = st.columns(len(models_for_inference)) # Create columns for side-by-side display
-
+        cols = st.columns(len(models_for_inference))
         for i, model in enumerate(models_for_inference):
             with cols[i]:
                 with st.spinner(f"Running `{model}`..."):
                     if is_direct_mode:
-                        result = run_inference_on_image(model, st.session_state.file_bytes, prompt, max_tokens, temperature, top_k, top_p)
+                        result = run_inference_on_image(model, st.session_state.file_bytes, prompt, max_tokens, temperature, top_k, top_p, INFERENCE_PROMPT)
                     else:
-                        result = run_inference_on_text(model, st.session_state.final_context, prompt, max_tokens, temperature, top_k, top_p)
+                        result = run_inference_on_text(model, st.session_state.final_context, prompt, max_tokens, temperature, top_k, top_p, INFERENCE_PROMPT)
                     st.session_state.inference_results[model] = result
-
-                # This block now renders the result immediately inside its column
                 with st.container(border=True):
                     st.markdown(f"##### **Model:** `{model}`")
                     st.markdown("---")
@@ -203,22 +168,11 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
                         st.markdown("---")
                         st.write(f"⏱️ {result.get('elapsed', 0):.2f}s | 🧮 {result.get('tokens', 0)} tokens")
 
-    # This logic places the download button in the second column, but only if there are results
     if st.session_state.get('inference_results'):
         with col2:
-            report_data = generate_report_markdown(
-                st.session_state.get('final_context'),
-                st.session_state.last_prompt,
-                st.session_state.inference_results,
-                st.session_state.extraction_model,
-                st.session_state.file_type
-            )
-            st.download_button(
-                label="📥 Download",
-                data=report_data,
-                file_name="llm_analysis_report.md",
-                mime="text/markdown"
-            )
+            # FIX: Changed st.session_state.get('final_text') to st.session_state.get('final_context')
+            report_data = generate_report_markdown(st.session_state.get('final_context'), st.session_state.last_prompt, st.session_state.inference_results, st.session_state.extraction_model, st.session_state.file_type)
+            st.download_button(label="📥 Download", data=report_data, file_name="llm_analysis_report.md", mime="text/markdown")
 
 elif not st.session_state.get('session_started'):
     st.info("To begin, upload a PDF or Image, configure your settings, then click **Start Session** in the sidebar.")

@@ -6,7 +6,7 @@ import io
 import base64
 import requests
 import json
-import streamlit as st # Import streamlit for caching
+import streamlit as st
 
 # This module is self-contained. You can configure the model and endpoint here.
 OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
@@ -28,9 +28,8 @@ def call_ollama_api(model: str, messages: list) -> str:
         "stream": False,
         "options": {"temperature": 0.0}
     }
-
     try:
-        response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload))
+        response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=300)
         response.raise_for_status()
         result = response.json()
         if 'message' in result and 'content' in result['message']:
@@ -52,10 +51,10 @@ def call_ollama_api(model: str, messages: list) -> str:
 
 def _get_raw_text(page: fitz.Page) -> str:
     """Performs a basic text extraction, with OCR fallback for scanned pages."""
-    st.write(f"    - Performing initial raw text extraction for page {page.number + 1}...")
+    st.write("  - Attempting direct text extraction...")
     text = page.get_text().strip()
     if not text:
-        st.write(f"    - Scanned page detected, falling back to OCR for page {page.number + 1}...")
+        st.warning("  - No text found. Switching to OCR...")
         try:
             pix = page.get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -63,75 +62,63 @@ def _get_raw_text(page: fitz.Page) -> str:
         except Exception as e:
             st.error(f"    - OCR failed: {e}")
             return ""
+    st.success("  - Text extracted successfully.")
     return text
 
 def _get_raw_text_from_image(page_image: Image.Image) -> str:
     """Performs OCR on a given PIL Image to get a 'rough draft'."""
-    st.write("    - Performing OCR on image...")
+    st.write("- **Step 2:** Performing OCR to get initial text.")
     try:
-        return pytesseract.image_to_string(page_image, lang='eng')
+        text = pytesseract.image_to_string(page_image, lang='eng')
+        st.success("  - OCR completed.")
+        return text
     except pytesseract.TesseractNotFoundError:
-        st.error("    - ERROR: Tesseract is not installed or not in your PATH.")
+        st.error("  - ERROR: Tesseract is not installed or not in your PATH.")
         return "[Tesseract Not Found - OCR Skipped]"
     except Exception as e:
+        st.error(f"  - OCR Failed: {e}")
         return f"[OCR Failed: {e}]"
 
-def _correct_text_with_vision(model: str, raw_text: str, page_image: Image.Image) -> str:
+def _correct_text_with_vision(model: str, raw_text: str, page_image: Image.Image, prompt_template: str) -> str:
     """Uses a multimodal LLM to correct and structure the raw text against the page image."""
-    st.write(f"    - Sending page to {model} for correction and structuring...")
+    st.write(f"- **Step 3:** Sending page to `{model}` for correction and structuring.")
     base64_image = image_to_base64(page_image)
-
-    prompt = f"""
-    You are a world-class document transcription expert. Your single most important job is to create a perfect, 1-to-1 transcription of the provided document image into a single block of Markdown text.
-
-    **CRITICAL INSTRUCTIONS:**
-    1.  **COMPLETE TRANSCRIPTION IS MANDATORY:** You must transcribe ALL text from the image, including every paragraph, heading, list, and footnote. DO NOT OMIT ANY TEXT.
-    2.  **UNIFY TABLES:** If the document contains tables with complex, multi-line headers, you MUST render them as a SINGLE, UNIFIED Markdown table with merged headers.
-    3.  **DIRECT OUTPUT ONLY:** Your entire response must be ONLY the transcribed content. Do not include any introductory phrases or explanations.
-
-    **ROUGH EXTRACTED TEXT (for context and error-checking):**
-    ---
-    {raw_text}
-    ---
-    """
-
+    prompt = prompt_template.format(raw_text=raw_text)
     messages = [{"role": "user", "content": prompt, "images": [base64_image]}]
-    return call_ollama_api(model, messages)
+    corrected_text = call_ollama_api(model, messages)
+    st.success("  - AI correction complete.")
+    return corrected_text
 
 # --- Main Public Function ---
-
-@st.cache_data
-def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_extraction: str) -> str | None:
+def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_extraction: str, extraction_prompt: str) -> str | None:
     """
     Orchestrates the full extraction and AI-powered correction pipeline for either a PDF or an image.
-    This function is cached to avoid re-running on the same file.
     """
     if not file_bytes:
         return None
 
-    st.write(f"🚀 Starting AI-Powered Extraction for a {file_type} file with model '{model_for_extraction}'")
+    # The spinner is now handled in the main app.py file.
+    # This function now just contains the extraction logic.
     full_corrected_context = ""
-
     try:
         if file_type == "application/pdf":
+            st.write("- **Step 1:** Opened PDF document.")
             with fitz.open(stream=file_bytes, filetype="pdf") as doc:
                 for i, page in enumerate(doc):
-                    st.write(f"\n📄 Processing Page {i+1}/{len(doc)}...")
+                    st.markdown(f"--- \n- **Step 2:** Processing Page {i+1}/{len(doc)}")
                     pix = page.get_pixmap(dpi=300)
                     page_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                     raw_text = _get_raw_text(page)
-
-                    corrected_text = _correct_text_with_vision(model_for_extraction, raw_text, page_image)
+                    corrected_text = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
                     if corrected_text.startswith("[ERROR"):
                         return None
                     full_corrected_context += f"\n\n--- Page {i+1} ---\n\n{corrected_text}"
-
+        
         elif "image" in file_type:
-            st.write("\n📄 Processing single image file...")
+            st.write("- **Step 1:** Opened image file.")
             page_image = Image.open(io.BytesIO(file_bytes))
             raw_text = _get_raw_text_from_image(page_image)
-
-            corrected_text = _correct_text_with_vision(model_for_extraction, raw_text, page_image)
+            corrected_text = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
             if corrected_text.startswith("[ERROR"):
                 return None
             full_corrected_context = corrected_text
@@ -139,14 +126,9 @@ def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_ex
         else:
             st.error(f"Unsupported file type: {file_type}")
             return None
-
-        with open("definitive_extraction_output.md", "w", encoding="utf-8") as f:
-            f.write(full_corrected_context)
-        st.write("\n✅ Definitive extraction complete.")
-        st.write("   - Corrected context saved to 'definitive_extraction_output.md'")
-
+        st.markdown("---")
+        st.success("✅ **Definitive extraction complete!**")
         return full_corrected_context
-
     except Exception as e:
         st.error(f"❌ An unexpected error occurred during extraction: {e}")
         import traceback
