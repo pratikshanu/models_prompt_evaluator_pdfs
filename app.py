@@ -79,7 +79,7 @@ with st.sidebar:
     
     extraction_model = st.selectbox(
         "Model for Extraction",
-        ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:24b", "qwen2.5vl:7b"],
+        ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:latest", "qwen2.5vl:7b"],
         index=2, # Default to llama3.2-vision:11b
         help="Choose your best vision model to create the high-quality context. (Disabled in 'Ask Question Directly' mode)",
         disabled=is_direct_qa_mode
@@ -87,8 +87,8 @@ with st.sidebar:
 
     models_for_inference = st.multiselect(
         "Models for Inference",
-        ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:24b", "qwen2.5vl:7b"],
-        default=["llama3.2-vision:11b", "gemma3:12b", "mistral-small3.2:24b"],
+        ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:latest", "qwen2.5vl:7b"],
+        default=["llama3.2-vision:11b", "gemma3:12b", "mistral-small3.2:latest"],
         help="Choose which models to ask questions of."
     )
     
