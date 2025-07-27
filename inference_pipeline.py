@@ -32,7 +32,7 @@ def _call_ollama_api(model: str, messages: list, max_tokens: int, temperature: f
             "top_p": top_p
         }
     }
-    
+
     start_time = time.time()
     try:
         response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload))
@@ -44,12 +44,12 @@ def _call_ollama_api(model: str, messages: list, max_tokens: int, temperature: f
             return {
                 "content": result['message']['content'].strip(),
                 "elapsed": end_time - start_time,
-                "tokens": result.get("eval_count", 0) 
+                "tokens": result.get("eval_count", 0)
             }
         else:
             error_info = result.get('error', 'Unknown error format.')
             return {"error": error_info}
-            
+
     except requests.exceptions.RequestException as e:
         return {"error": str(e)}
 
