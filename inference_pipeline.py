@@ -35,7 +35,7 @@ def _call_ollama_api(model: str, messages: list, max_tokens: int, temperature: f
     
     start_time = time.time()
     try:
-        response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=300)
+        response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=1500)
         response.raise_for_status()
         result = response.json()
         end_time = time.time()
