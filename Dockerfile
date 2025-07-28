@@ -68,7 +68,7 @@ RUN bash -c '\
     ollama pull llava:13b || echo "WARNING: Failed to pull llava:13b. Continuing build." && \
     ollama pull gemma3:12b || echo "WARNING: Failed to pull gemma3:12b. Continuing build." && \
     ollama pull llama3.2-vision:11b || echo "WARNING: Failed to pull llama3.2-vision:11b. Continuing build." && \
-    ollama pull mistral-small3.2:latest || echo "WARNING: Failed to pull mistral-small3.2:latest. Continuing build." && \
+    ollama pull mistral-small3.2:24b || echo "WARNING: Failed to pull mistral-small3.2:24b. Continuing build." && \
     ollama pull qwen2.5vl:7b || echo "WARNING: Failed to pull qwen2.5vl:7b. Continuing build." && \
     \
     echo "Model pulling complete. Shutting down build-time Ollama server..." && \
