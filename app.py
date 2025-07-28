@@ -18,11 +18,17 @@ if 'last_prompt' not in st.session_state:
     st.session_state.last_prompt = ""
 if 'inference_results' not in st.session_state:
     st.session_state.inference_results = {}
-# Add new state keys for extraction metrics
 if 'extraction_time' not in st.session_state:
     st.session_state.extraction_time = 0.0
 if 'extraction_tokens' not in st.session_state:
     st.session_state.extraction_tokens = 0
+if 'extraction_prompt' not in st.session_state:
+    st.session_state.extraction_prompt = EXTRACTION_PROMPT
+if 'inference_prompt' not in st.session_state:
+    st.session_state.inference_prompt = INFERENCE_PROMPT
+# Add state for prompt versioning
+if 'saved_prompts' not in st.session_state:
+    st.session_state.saved_prompts = {"Default": {"extraction": EXTRACTION_PROMPT, "inference": INFERENCE_PROMPT}}
 
 
 # --- Helper Function for Report Generation ---
@@ -31,7 +37,6 @@ def generate_report_markdown(final_context, prompt, inference_results, extractio
     report = f"# Analysis Report\n\n"
     if final_context:
         report += f"## Extracted Content (using `{extraction_model}`)\n\n"
-        # Add extraction metrics to the report
         report += f"**Time Taken:** {extraction_time:.2f}s | **Output Tokens:** {extraction_tokens}\n\n"
         report += f"```markdown\n{final_context}\n```\n\n"
     else:
@@ -74,10 +79,56 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("#### 3. Set Parameters")
     max_tokens = st.slider("Max Tokens", 100, 4000, 1000, help="Sets the maximum number of tokens to generate in the response.")
-    temperature = st.slider("Temperature", 0.0, 1.0, 0.1, help="Controls randomness. Lower is more deterministic, higher is more creative.")
+    temperature = st.slider("Temperature", 0.0, 1.0, 0.0, help="Controls randomness. Lower is more deterministic, higher is more creative.")
     st.markdown("##### Advanced Parameters")
     top_k = st.slider("Top K", 0, 100, 40, help="Reduces the probability of generating nonsense. A higher value (e.g., 100) gives more varied answers.")
     top_p = st.slider("Top P", 0.0, 1.0, 0.9, help="Works with Top K to improve realism. A higher value (e.g., 0.9) gives more varied answers.")
+
+    st.markdown("---")
+    # --- Advanced Prompt Engineering Section ---
+    with st.expander("**Prompt Engineering**", expanded=False):
+        
+        # --- Prompt Versioning UI ---
+        st.markdown("###### Prompt Library")
+        col1, col2 = st.columns([3, 1])
+        
+        def load_prompt():
+            name = st.session_state.selected_prompt_name
+            if name in st.session_state.saved_prompts:
+                st.session_state.extraction_prompt = st.session_state.saved_prompts[name]["extraction"]
+                st.session_state.inference_prompt = st.session_state.saved_prompts[name]["inference"]
+
+        prompt_names = list(st.session_state.saved_prompts.keys())
+        col1.selectbox("Load Saved Prompt", prompt_names, key="selected_prompt_name", on_change=load_prompt, label_visibility="collapsed")
+
+        if col2.button("Delete", use_container_width=True):
+            name_to_delete = st.session_state.selected_prompt_name
+            if name_to_delete != "Default" and name_to_delete in st.session_state.saved_prompts:
+                del st.session_state.saved_prompts[name_to_delete]
+                st.rerun()
+
+        st.markdown("---")
+
+        # --- Prompt Editing UI ---
+        st.text_area("Extraction Prompt Template", key="extraction_prompt", height=200, help="Modify the prompt for document extraction. Variable: {raw_text}")
+        st.text_area("Inference Prompt Template", key="inference_prompt", height=200, help="Modify the prompt for Q&A. Variables: {final_context}, {user_prompt}")
+        
+        st.markdown("---")
+        st.markdown("###### Save Current Prompts")
+        col1a, col2a = st.columns([3, 1])
+        new_prompt_name = col1a.text_input("Save as:", placeholder="e.g., 'Factual QA v2'", label_visibility="collapsed")
+        if col2a.button("Save", use_container_width=True):
+            if new_prompt_name:
+                st.session_state.saved_prompts[new_prompt_name] = {
+                    "extraction": st.session_state.extraction_prompt,
+                    "inference": st.session_state.inference_prompt
+                }
+                st.success(f"Prompt '{new_prompt_name}' saved!")
+                time.sleep(1) # Give user time to see success message
+                st.rerun()
+            else:
+                st.warning("Please enter a name to save the prompt.")
+
 
     st.markdown("---")
     if st.button("🚀 Start Session", use_container_width=True, type="primary"):
@@ -93,8 +144,10 @@ with st.sidebar:
             st.warning("Please upload a file and select at least one inference model.")
 
     if st.button("🔄 Reset", use_container_width=True):
+        # Preserve saved prompts during a reset
         for k in list(st.session_state.keys()):
-            del st.session_state[k]
+            if k != 'saved_prompts':
+                del st.session_state[k]
         st.rerun()
 
 # ——— Main Page Content ———
@@ -109,8 +162,10 @@ if st.session_state.get('run_extraction'):
         st.success("Direct Q&A mode ready. Ask a question below.")
     else:
         with st.spinner(f"Running extraction with `{st.session_state.extraction_model}`..."), st.expander("Show Extraction Log", expanded=True):
-            # Capture the new return values from the extraction function
-            final_context, tokens, elapsed = extract_and_correct_document(st.session_state.file_bytes, st.session_state.file_type, st.session_state.extraction_model, EXTRACTION_PROMPT)
+            final_context, tokens, elapsed = extract_and_correct_document(
+                st.session_state.file_bytes, st.session_state.file_type, 
+                st.session_state.extraction_model, st.session_state.extraction_prompt
+            )
             
         if st.session_state.file_type == "application/pdf":
             st.session_state.pages_for_display = extract_pdf_pages(st.session_state.file_bytes)
@@ -119,7 +174,6 @@ if st.session_state.get('run_extraction'):
             
         if final_context:
             st.session_state.final_context = final_context
-            # Store metrics in session state
             st.session_state.extraction_time = elapsed
             st.session_state.extraction_tokens = tokens
             st.session_state.extraction_done = True
@@ -132,6 +186,7 @@ if st.session_state.get('run_extraction'):
     st.rerun()
 
 if st.session_state.get('session_started') and st.session_state.get('extraction_done'):
+    
     is_direct_mode = st.session_state.get('final_context') is None
     
     if is_direct_mode:
@@ -143,12 +198,11 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
         st.subheader("Extracted Content vs. Original Document")
         col_img, col_text = st.columns([2.5, 3])
         with col_text:
-            # Display the extraction metrics using columns and st.metric
             st.markdown(f"**Extraction Metrics** (using `{st.session_state.extraction_model}`)")
             metric1, metric2 = st.columns(2)
             metric1.metric("⏱️ Time", f"{st.session_state.get('extraction_time', 0):.2f}s")
             metric2.metric("🧮 Tokens", f"{st.session_state.get('extraction_tokens', 0)}")
-            st.text_area(label="Extracted Content", value=st.session_state.final_context, height=550, label_visibility="collapsed")
+            st.text_area("Extracted Content", st.session_state.final_context, height=550, label_visibility="collapsed")
             
         with col_img:
             page_tabs = st.tabs([f"Page {i+1}" for i, _ in enumerate(st.session_state.pages_for_display)])
@@ -171,10 +225,11 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
         for i, model in enumerate(models_for_inference):
             with cols[i]:
                 with st.spinner(f"Running `{model}`..."):
+                    inference_prompt_template = st.session_state.inference_prompt
                     if is_direct_mode:
-                        result = run_inference_on_image(model, st.session_state.file_bytes, prompt, max_tokens, temperature, top_k, top_p, INFERENCE_PROMPT)
+                        result = run_inference_on_image(model, st.session_state.file_bytes, prompt, max_tokens, temperature, top_k, top_p, inference_prompt_template)
                     else:
-                        result = run_inference_on_text(model, st.session_state.final_context, prompt, max_tokens, temperature, top_k, top_p, INFERENCE_PROMPT)
+                        result = run_inference_on_text(model, st.session_state.final_context, prompt, max_tokens, temperature, top_k, top_p, inference_prompt_template)
                     st.session_state.inference_results[model] = result
                 with st.container(border=True):
                     st.markdown(f"##### **Model:** `{model}`")
@@ -188,7 +243,6 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
 
     if st.session_state.get('inference_results'):
         with col2:
-            # Pass the new metrics to the report generator
             report_data = generate_report_markdown(
                 st.session_state.get('final_context'),
                 st.session_state.last_prompt,
@@ -198,7 +252,7 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
                 st.session_state.get('extraction_time', 0),
                 st.session_state.get('extraction_tokens', 0)
             )
-            st.download_button(label="📥 Download", data=report_data, file_name="llm_analysis_report.md", mime="text/markdown")
+            st.download_button(label="📥 Download", data=report_data, file_name="llm_analysis_report.md")
 
 elif not st.session_state.get('session_started'):
     st.info("To begin, upload a PDF or Image, configure your settings, then click **Start Session** in the sidebar.")
