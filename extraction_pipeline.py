@@ -19,17 +19,20 @@ def image_to_base64(image: Image.Image) -> str:
     image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-def call_ollama_api(model: str, messages: list) -> str:
-    """Generic function to call the local Ollama API."""
+def call_ollama_api(model: str, messages: list) -> dict:
+    """
+    Generic function to call the local Ollama API.
+    Returns a dictionary with content, tokens, elapsed time, or an error.
+    """
     headers = {'Content-Type': 'application/json'}
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": 0.0}
+        "options": {"temperature": 0.0, "num_predict": -1, "top_p": 0.1,}
     }
     try:
-        response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=300)
+        response = requests.post(OLLAMA_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=1800)
         response.raise_for_status()
         result = response.json()
         if 'message' in result and 'content' in result['message']:
@@ -38,14 +41,20 @@ def call_ollama_api(model: str, messages: list) -> str:
                 content = content[10:]
             if content.endswith("```"):
                 content = content[:-3]
-            return content.strip()
+            
+            # Return a dictionary with results
+            return {
+                "content": content.strip(),
+                "tokens": result.get('eval_count', 0),
+                "elapsed": result.get('total_duration', 0) / 1_000_000_000  # Convert ns to s
+            }
         else:
             error_info = result.get('error', 'Unknown error format.')
             st.error(f"API call failed. Reason: {error_info}")
-            return f"[ERROR: API call failed. Details: {error_info}]"
+            return {"error": f"API call failed. Details: {error_info}"}
     except requests.exceptions.RequestException as e:
         st.error(f"An error occurred during the API request: {e}")
-        return f"[ERROR: HTTP Request failed: {e}]"
+        return {"error": f"HTTP Request failed: {e}"}
 
 # --- Internal Pipeline Functions ---
 
@@ -79,27 +88,32 @@ def _get_raw_text_from_image(page_image: Image.Image) -> str:
         st.error(f"  - OCR Failed: {e}")
         return f"[OCR Failed: {e}]"
 
-def _correct_text_with_vision(model: str, raw_text: str, page_image: Image.Image, prompt_template: str) -> str:
+def _correct_text_with_vision(model: str, raw_text: str, page_image: Image.Image, prompt_template: str) -> dict:
     """Uses a multimodal LLM to correct and structure the raw text against the page image."""
     st.write(f"- **Step 3:** Sending page to `{model}` for correction and structuring.")
     base64_image = image_to_base64(page_image)
     prompt = prompt_template.format(raw_text=raw_text)
     messages = [{"role": "user", "content": prompt, "images": [base64_image]}]
-    corrected_text = call_ollama_api(model, messages)
-    st.success("  - AI correction complete.")
-    return corrected_text
+    result = call_ollama_api(model, messages)
+    if "error" in result:
+        st.error("  - AI correction failed.")
+    else:
+        st.success("  - AI correction complete.")
+    return result
 
 # --- Main Public Function ---
-def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_extraction: str, extraction_prompt: str) -> str | None:
+def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_extraction: str, extraction_prompt: str) -> tuple[str | None, int, float]:
     """
     Orchestrates the full extraction and AI-powered correction pipeline for either a PDF or an image.
+    Returns the corrected context, total tokens generated, and total time elapsed.
     """
     if not file_bytes:
-        return None
+        return None, 0, 0.0
 
-    # The spinner is now handled in the main app.py file.
-    # This function now just contains the extraction logic.
     full_corrected_context = ""
+    total_tokens = 0
+    total_elapsed = 0.0
+    
     try:
         if file_type == "application/pdf":
             st.write("- **Step 1:** Opened PDF document.")
@@ -109,28 +123,39 @@ def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_ex
                     pix = page.get_pixmap(dpi=300)
                     page_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                     raw_text = _get_raw_text(page)
-                    corrected_text = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
-                    if corrected_text.startswith("[ERROR"):
-                        return None
-                    full_corrected_context += f"\n\n--- Page {i+1} ---\n\n{corrected_text}"
+                    correction_result = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
+                    
+                    if "error" in correction_result:
+                        return None, 0, 0.0
+                    
+                    # Aggregate results
+                    total_tokens += correction_result.get('tokens', 0)
+                    total_elapsed += correction_result.get('elapsed', 0.0)
+                    full_corrected_context += f"\n\n--- Page {i+1} ---\n\n{correction_result.get('content', '')}"
         
         elif "image" in file_type:
             st.write("- **Step 1:** Opened image file.")
             page_image = Image.open(io.BytesIO(file_bytes))
             raw_text = _get_raw_text_from_image(page_image)
-            corrected_text = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
-            if corrected_text.startswith("[ERROR"):
-                return None
-            full_corrected_context = corrected_text
+            correction_result = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
+            
+            if "error" in correction_result:
+                return None, 0, 0.0
+
+            full_corrected_context = correction_result.get('content', '')
+            total_tokens = correction_result.get('tokens', 0)
+            total_elapsed = correction_result.get('elapsed', 0.0)
 
         else:
             st.error(f"Unsupported file type: {file_type}")
-            return None
+            return None, 0, 0.0
+            
         st.markdown("---")
         st.success("✅ **Definitive extraction complete!**")
-        return full_corrected_context
+        return full_corrected_context.strip(), total_tokens, total_elapsed
+        
     except Exception as e:
         st.error(f"❌ An unexpected error occurred during extraction: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return None, 0, 0.0

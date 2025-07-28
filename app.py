@@ -5,6 +5,7 @@ from inference_pipeline import run_inference_on_text, run_inference_on_image
 from prompts import EXTRACTION_PROMPT, INFERENCE_PROMPT
 from PIL import Image
 import io
+import time
 
 st.set_page_config(page_title="LLM + Prompts Evaluator", layout="wide")
 
@@ -17,13 +18,21 @@ if 'last_prompt' not in st.session_state:
     st.session_state.last_prompt = ""
 if 'inference_results' not in st.session_state:
     st.session_state.inference_results = {}
+# Add new state keys for extraction metrics
+if 'extraction_time' not in st.session_state:
+    st.session_state.extraction_time = 0.0
+if 'extraction_tokens' not in st.session_state:
+    st.session_state.extraction_tokens = 0
+
 
 # --- Helper Function for Report Generation ---
-def generate_report_markdown(final_context, prompt, inference_results, extraction_model, file_type):
+def generate_report_markdown(final_context, prompt, inference_results, extraction_model, file_type, extraction_time, extraction_tokens):
     """Generates a comprehensive Markdown report of the entire analysis session."""
     report = f"# Analysis Report\n\n"
     if final_context:
         report += f"## Extracted Content (using `{extraction_model}`)\n\n"
+        # Add extraction metrics to the report
+        report += f"**Time Taken:** {extraction_time:.2f}s | **Output Tokens:** {extraction_tokens}\n\n"
         report += f"```markdown\n{final_context}\n```\n\n"
     else:
         report += f"## Direct Q&A on Image\n\n"
@@ -100,7 +109,8 @@ if st.session_state.get('run_extraction'):
         st.success("Direct Q&A mode ready. Ask a question below.")
     else:
         with st.spinner(f"Running extraction with `{st.session_state.extraction_model}`..."), st.expander("Show Extraction Log", expanded=True):
-            final_context = extract_and_correct_document(st.session_state.file_bytes, st.session_state.file_type, st.session_state.extraction_model, EXTRACTION_PROMPT)
+            # Capture the new return values from the extraction function
+            final_context, tokens, elapsed = extract_and_correct_document(st.session_state.file_bytes, st.session_state.file_type, st.session_state.extraction_model, EXTRACTION_PROMPT)
             
         if st.session_state.file_type == "application/pdf":
             st.session_state.pages_for_display = extract_pdf_pages(st.session_state.file_bytes)
@@ -109,6 +119,9 @@ if st.session_state.get('run_extraction'):
             
         if final_context:
             st.session_state.final_context = final_context
+            # Store metrics in session state
+            st.session_state.extraction_time = elapsed
+            st.session_state.extraction_tokens = tokens
             st.session_state.extraction_done = True
             st.success("Extraction complete!")
         else:
@@ -123,7 +136,6 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
     
     if is_direct_mode:
         st.subheader("Direct Q&A on Image")
-        # FIX: Use columns to constrain the image size and center it.
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.image(st.session_state.pages_for_display[0], caption="Original Image", use_container_width=True)
@@ -131,7 +143,13 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
         st.subheader("Extracted Content vs. Original Document")
         col_img, col_text = st.columns([2.5, 3])
         with col_text:
-            st.text_area(label=f"Extracted Content (using `{st.session_state.extraction_model}`)", value=st.session_state.final_context, height=600)
+            # Display the extraction metrics using columns and st.metric
+            st.markdown(f"**Extraction Metrics** (using `{st.session_state.extraction_model}`)")
+            metric1, metric2 = st.columns(2)
+            metric1.metric("⏱️ Time", f"{st.session_state.get('extraction_time', 0):.2f}s")
+            metric2.metric("🧮 Tokens", f"{st.session_state.get('extraction_tokens', 0)}")
+            st.text_area(label="Extracted Content", value=st.session_state.final_context, height=550, label_visibility="collapsed")
+            
         with col_img:
             page_tabs = st.tabs([f"Page {i+1}" for i, _ in enumerate(st.session_state.pages_for_display)])
             for i, tab in enumerate(page_tabs):
@@ -170,8 +188,16 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
 
     if st.session_state.get('inference_results'):
         with col2:
-            # FIX: Changed st.session_state.get('final_text') to st.session_state.get('final_context')
-            report_data = generate_report_markdown(st.session_state.get('final_context'), st.session_state.last_prompt, st.session_state.inference_results, st.session_state.extraction_model, st.session_state.file_type)
+            # Pass the new metrics to the report generator
+            report_data = generate_report_markdown(
+                st.session_state.get('final_context'),
+                st.session_state.last_prompt,
+                st.session_state.inference_results,
+                st.session_state.extraction_model,
+                st.session_state.file_type,
+                st.session_state.get('extraction_time', 0),
+                st.session_state.get('extraction_tokens', 0)
+            )
             st.download_button(label="📥 Download", data=report_data, file_name="llm_analysis_report.md", mime="text/markdown")
 
 elif not st.session_state.get('session_started'):
