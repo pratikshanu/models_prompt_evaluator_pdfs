@@ -7,6 +7,7 @@ import base64
 import requests
 import json
 import streamlit as st
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # This module is self-contained. You can configure the model and endpoint here.
 OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
@@ -39,14 +40,15 @@ def call_ollama_api(model: str, messages: list) -> dict:
             content = result['message']['content'].strip()
             if content.startswith("```markdown"):
                 content = content[10:]
+            if content.startswith("```json"):
+                content = content[7:]
             if content.endswith("```"):
                 content = content[:-3]
             
-            # Return a dictionary with results
             return {
                 "content": content.strip(),
                 "tokens": result.get('eval_count', 0),
-                "elapsed": result.get('total_duration', 0) / 1_000_000_000  # Convert ns to s
+                "elapsed": result.get('total_duration', 0) / 1_000_000_000
             }
         else:
             error_info = result.get('error', 'Unknown error format.')
@@ -60,10 +62,8 @@ def call_ollama_api(model: str, messages: list) -> dict:
 
 def _get_raw_text(page: fitz.Page) -> str:
     """Performs a basic text extraction, with OCR fallback for scanned pages."""
-    st.write("  - Attempting direct text extraction...")
     text = page.get_text().strip()
     if not text:
-        st.warning("  - No text found. Switching to OCR...")
         try:
             pix = page.get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -71,7 +71,6 @@ def _get_raw_text(page: fitz.Page) -> str:
         except Exception as e:
             st.error(f"    - OCR failed: {e}")
             return ""
-    st.success("  - Text extracted successfully.")
     return text
 
 def _get_raw_text_from_image(page_image: Image.Image) -> str:
@@ -90,22 +89,37 @@ def _get_raw_text_from_image(page_image: Image.Image) -> str:
 
 def _correct_text_with_vision(model: str, raw_text: str, page_image: Image.Image, prompt_template: str) -> dict:
     """Uses a multimodal LLM to correct and structure the raw text against the page image."""
-    st.write(f"- **Step 3:** Sending page to `{model}` for correction and structuring.")
     base64_image = image_to_base64(page_image)
     prompt = prompt_template.format(raw_text=raw_text)
     messages = [{"role": "user", "content": prompt, "images": [base64_image]}]
     result = call_ollama_api(model, messages)
-    if "error" in result:
-        st.error("  - AI correction failed.")
-    else:
-        st.success("  - AI correction complete.")
     return result
+
+# --- Worker for Parallel Processing ---
+def _process_page_worker(args):
+    """
+    A worker function to process a single page of a PDF.
+    This function is designed to be called by a thread pool executor.
+    """
+    page_num, file_bytes, model_for_extraction, extraction_prompt = args
+    st.write(f"- Processing Page {page_num + 1}...")
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    page = doc[page_num]
+    
+    pix = page.get_pixmap(dpi=300)
+    page_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    raw_text = _get_raw_text(page)
+    
+    correction_result = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
+    
+    doc.close()
+    return page_num, correction_result
 
 # --- Main Public Function ---
 def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_extraction: str, extraction_prompt: str) -> tuple[str | None, int, float]:
     """
     Orchestrates the full extraction and AI-powered correction pipeline for either a PDF or an image.
-    Returns the corrected context, total tokens generated, and total time elapsed.
+    For PDFs, it processes pages in parallel to leverage multiple GPUs.
     """
     if not file_bytes:
         return None, 0, 0.0
@@ -116,23 +130,32 @@ def extract_and_correct_document(file_bytes: bytes, file_type: str, model_for_ex
     
     try:
         if file_type == "application/pdf":
-            st.write("- **Step 1:** Opened PDF document.")
-            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-                for i, page in enumerate(doc):
-                    st.markdown(f"--- \n- **Step 2:** Processing Page {i+1}/{len(doc)}")
-                    pix = page.get_pixmap(dpi=300)
-                    page_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                    raw_text = _get_raw_text(page)
-                    correction_result = _correct_text_with_vision(model_for_extraction, raw_text, page_image, extraction_prompt)
-                    
-                    if "error" in correction_result:
-                        return None, 0, 0.0
-                    
-                    # Aggregate results
-                    total_tokens += correction_result.get('tokens', 0)
-                    total_elapsed += correction_result.get('elapsed', 0.0)
-                    full_corrected_context += f"\n\n--- Page {i+1} ---\n\n{correction_result.get('content', '')}"
-        
+            st.write("- **Step 1:** Opened PDF. Starting parallel page processing...")
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            num_pages = len(doc)
+            doc.close()
+
+            page_results = [None] * num_pages
+            
+            # Using 4 workers, assuming 4 GPUs for optimal performance.
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {executor.submit(_process_page_worker, (i, file_bytes, model_for_extraction, extraction_prompt)): i for i in range(num_pages)}
+                
+                for future in as_completed(futures):
+                    page_num, correction_result = future.result()
+                    if "error" not in correction_result:
+                        st.success(f"  - Page {page_num + 1} corrected successfully.")
+                        page_results[page_num] = correction_result
+                        total_tokens += correction_result.get('tokens', 0)
+                        total_elapsed = max(total_elapsed, correction_result.get('elapsed', 0.0)) # Use max elapsed time for parallel runs
+                    else:
+                        st.error(f"  - Failed to correct Page {page_num + 1}.")
+                        page_results[page_num] = {"content": f"[ERROR PROCESSING PAGE {page_num + 1}]"}
+            
+            for i, result in enumerate(page_results):
+                if result:
+                    full_corrected_context += f"\n\n--- Page {i+1} ---\n\n{result.get('content', '')}"
+
         elif "image" in file_type:
             st.write("- **Step 1:** Opened image file.")
             page_image = Image.open(io.BytesIO(file_bytes))

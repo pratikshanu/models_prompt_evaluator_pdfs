@@ -6,6 +6,7 @@ from prompts import EXTRACTION_PROMPT, INFERENCE_PROMPT
 from PIL import Image
 import io
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 st.set_page_config(page_title="LLM + Prompts Evaluator", layout="wide")
 
@@ -124,7 +125,7 @@ with st.sidebar:
                     "inference": st.session_state.inference_prompt
                 }
                 st.success(f"Prompt '{new_prompt_name}' saved!")
-                time.sleep(1) # Give user time to see success message
+                time.sleep(1) 
                 st.rerun()
             else:
                 st.warning("Please enter a name to save the prompt.")
@@ -140,15 +141,28 @@ with st.sidebar:
             st.session_state.session_started = True
             st.session_state.run_extraction = True
             st.session_state.inference_results = {}
+            st.rerun()
         else:
-            st.warning("Please upload a file and select at least one inference model.")
+            st.warning("Please ensure a file is uploaded and select at least one inference model.")
 
     if st.button("🔄 Reset", use_container_width=True):
-        # Preserve saved prompts during a reset
         for k in list(st.session_state.keys()):
             if k != 'saved_prompts':
                 del st.session_state[k]
         st.rerun()
+
+# --- Worker for Parallel Inference ---
+def _run_inference_worker(args):
+    """
+    A worker function to run inference for a single model.
+    Designed to be called by a thread pool executor.
+    """
+    model, is_direct_mode, file_bytes, user_prompt, max_tokens, temperature, top_k, top_p, inference_prompt_template, final_context = args
+    if is_direct_mode:
+        result = run_inference_on_image(model, file_bytes, user_prompt, max_tokens, temperature, top_k, top_p, inference_prompt_template)
+    else:
+        result = run_inference_on_text(model, final_context, user_prompt, max_tokens, temperature, top_k, top_p, inference_prompt_template)
+    return model, result
 
 # ——— Main Page Content ———
 st.title("LLM + Prompts Evaluator")
@@ -220,19 +234,30 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
     if run_inference_clicked and prompt:
         st.session_state.last_prompt = prompt
         st.session_state.inference_results = {}
-        st.subheader("🧠 Inference Results")
-        cols = st.columns(len(models_for_inference))
-        for i, model in enumerate(models_for_inference):
-            with cols[i]:
-                with st.spinner(f"Running `{model}`..."):
-                    inference_prompt_template = st.session_state.inference_prompt
-                    if is_direct_mode:
-                        result = run_inference_on_image(model, st.session_state.file_bytes, prompt, max_tokens, temperature, top_k, top_p, inference_prompt_template)
-                    else:
-                        result = run_inference_on_text(model, st.session_state.final_context, prompt, max_tokens, temperature, top_k, top_p, inference_prompt_template)
+        
+        with st.spinner("Running inference on all selected models in parallel..."):
+            with ThreadPoolExecutor() as executor:
+                tasks = []
+                for model in models_for_inference:
+                    args = (model, is_direct_mode, st.session_state.file_bytes, prompt, max_tokens, temperature, top_k, top_p, st.session_state.inference_prompt, st.session_state.get('final_context'))
+                    tasks.append(executor.submit(_run_inference_worker, args))
+                
+                for future in tasks:
+                    model, result = future.result()
                     st.session_state.inference_results[model] = result
+        st.rerun()
+
+    if st.session_state.get('inference_results'):
+        st.subheader("🧠 Inference Results")
+        if st.session_state.last_prompt:
+             st.write(f"Showing results for question: *\"{st.session_state.last_prompt}\"*")
+
+        cols = st.columns(len(st.session_state.models_for_inference))
+        for i, model_name in enumerate(st.session_state.models_for_inference):
+            with cols[i]:
+                result = st.session_state.inference_results.get(model_name, {})
                 with st.container(border=True):
-                    st.markdown(f"##### **Model:** `{model}`")
+                    st.markdown(f"##### **Model:** `{model_name}`")
                     st.markdown("---")
                     if "error" in result:
                          st.error(f"**Error:** {result['error']}")
@@ -240,9 +265,9 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
                         st.markdown(result.get('content', 'No content returned.'))
                         st.markdown("---")
                         st.write(f"⏱️ {result.get('elapsed', 0):.2f}s | 🧮 {result.get('tokens', 0)} tokens")
-
-    if st.session_state.get('inference_results'):
+        
         with col2:
+             # This button is now outside the main inference block to be always visible with results
             report_data = generate_report_markdown(
                 st.session_state.get('final_context'),
                 st.session_state.last_prompt,
@@ -253,6 +278,7 @@ if st.session_state.get('session_started') and st.session_state.get('extraction_
                 st.session_state.get('extraction_tokens', 0)
             )
             st.download_button(label="📥 Download", data=report_data, file_name="llm_analysis_report.md")
+
 
 elif not st.session_state.get('session_started'):
     st.info("To begin, upload a PDF or Image, configure your settings, then click **Start Session** in the sidebar.")
