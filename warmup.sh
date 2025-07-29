@@ -3,7 +3,7 @@
 # --- Configuration ---
 OLLAMA_HOST="http://localhost:11434" # Default Ollama host in Docker
 MODELS=(
-    "mistral-small3.2:24b"
+    "qwen2.5vl:7b"
     "llama3.2-vision:11b" 
     "gemma3:12b"
 )

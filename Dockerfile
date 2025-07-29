@@ -73,7 +73,6 @@ RUN bash -c '\
     ollama pull llava:13b || echo "WARNING: Failed to pull llava:13b." && \
     ollama pull gemma3:12b || echo "WARNING: Failed to pull gemma3:12b." && \
     ollama pull llama3.2-vision:11b || echo "WARNING: Failed to pull llama3.2-vision:11b." && \
-    ollama pull mistral-small3.2:24b || echo "WARNING: Failed to pull mistral-small3.2:24b." && \
     ollama pull qwen2.5vl:7b || echo "WARNING: Failed to pull qwen2.5vl:7b." && \
     \
     echo "Model setup complete. Shutting down build-time Ollama server..." && \

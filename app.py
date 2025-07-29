@@ -72,8 +72,8 @@ with st.sidebar:
     st.markdown("#### 2. Select Models")
     is_direct_qa_mode = (uploaded_file is not None and "image" in uploaded_file.type and st.session_state.qa_mode == "Ask Question Directly")
     
-    extraction_models = st.multiselect("Models for Extraction", ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:24b", "qwen2.5vl:7b"], default=["llama3.2-vision:11b"], help="Choose one or more models to perform extraction in parallel.", disabled=is_direct_qa_mode)
-    models_for_inference = st.multiselect("Models for Inference", ["llava:13b", "gemma3:12b", "llama3.2-vision:11b", "mistral-small3.2:24b", "qwen2.5vl:7b"], default=["llama3.2-vision:11b", "gemma3:12b", "mistral-small3.2:24b"], help="Choose which models to ask questions of.")
+    extraction_models = st.multiselect("Models for Extraction", [ "llama3.2-vision:11b", "gemma3:12b", "qwen2.5vl:7b","llava:13b"], default=["llama3.2-vision:11b"], help="Choose one or more models to perform extraction in parallel.", disabled=is_direct_qa_mode)
+    models_for_inference = st.multiselect("Models for Inference", ["llama3.2-vision:11b", "gemma3:12b", "qwen2.5vl:7b","llava:13b"], default=["llama3.2-vision:11b", "gemma3:12b", "qwen2.5vl:7b"], help="Choose which models to ask questions of.")
     
     st.markdown("---")
     st.markdown("#### 3. Set Parameters")
