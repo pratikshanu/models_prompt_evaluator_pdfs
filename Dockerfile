@@ -1,5 +1,3 @@
-# Dockerfile
-
 # Stage 1: Base image with NVIDIA CUDA support
 # Using a specific CUDA image that's commonly stable for AI/ML tasks on Ubuntu 22.04
 FROM nvidia/cuda:12.3.2-base-ubuntu22.04
@@ -58,6 +56,9 @@ WORKDIR /app
 # Copy all application files from the current directory on the host to /app in the container.
 COPY . /app
 
+# --- Make the warmup script executable ---
+RUN chmod +x /app/warmup.sh
+
 # --- Robust Ollama Model Pre-pulling ---
 # This block ensures Ollama is fully installed and running before attempting to pull models.
 RUN bash -c '\
@@ -95,11 +96,14 @@ EXPOSE 8501
 EXPOSE 11434
 
 # Entrypoint for running your application.
+# This now starts Ollama, runs the warmup script in the background, and then starts Streamlit.
 ENTRYPOINT ["bash", "-c", "\
     echo \"Starting Ollama server for application runtime...\" && \
     OLLAMA_HOST=0.0.0.0 ollama serve > /dev/null 2>&1 & \
     echo \"Waiting for Ollama API to become available for the application...\" && \
     until curl -s http://localhost:11434 > /dev/null; do sleep 2; done && \
-    echo \"✅ Ollama is ready for the application! Launching Streamlit...\" && \
+    echo \"✅ Ollama is ready! Running warmup script in the background...\" && \
+    ./warmup.sh & \
+    echo \"✅ Warmup script initiated. Launching Streamlit...\" && \
     streamlit run app.py --server.port=8501 --server.address=0.0.0.0 \
 "]

@@ -3,9 +3,9 @@
 # --- Configuration ---
 OLLAMA_HOST="http://localhost:11434" # Default Ollama host in Docker
 MODELS=(
-    "mistral-small:24b"   # Use the exact tag you pulled for Mistral
-    "llama3.2-11b"        # Use the exact tag you pulled for Llama
-    "gemma3:12b"          # Use the exact tag you pulled for Gemma
+    "mistral-small3.2:24b"
+    "llama3.2-vision:11b" 
+    "gemma3:12b"
 )
 MAX_RETRIES=30 # Max attempts to check if Ollama is ready
 SLEEP_TIME=5   # Seconds to wait between retries
