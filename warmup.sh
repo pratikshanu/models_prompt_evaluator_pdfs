@@ -4,8 +4,6 @@
 OLLAMA_HOST="http://localhost:11434" # Default Ollama host in Docker
 MODELS=(
     "mistral-small3.2:24b"
-    "llama3.2-vision:11b" 
-    "gemma3:12b"
 )
 MAX_RETRIES=30 # Max attempts to check if Ollama is ready
 SLEEP_TIME=5   # Seconds to wait between retries
